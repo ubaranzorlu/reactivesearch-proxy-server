@@ -1,34 +1,39 @@
 const express = require('express');
-const proxy = require('http-proxy-middleware');
+const {responseInterceptor, createProxyMiddleware} = require('http-proxy-middleware');
 const btoa = require('btoa');
 const app = express();
-const bodyParser = require('body-parser')
+const fixNullValuesOnBuckets = require('./fixNullValuesOnBuckets');
 
 /* This is where we specify options for the http-proxy-middleware
  * We set the target to appbase.io backend here. You can also
  * add your own backend url here */
 const options = {
-    target: 'https://scalr.api.appbase.io/',
+    target: process.env.ELASTIC_URL,
     changeOrigin: true,
     onProxyReq: (proxyReq, req) => {
         proxyReq.setHeader(
             'Authorization',
-            `Basic ${btoa('cf7QByt5e:d2d60548-82a9-43cc-8b40-93cbbe75c34c')}`
+            `Basic ${btoa(process.env.ELASTIC_CREDENTIALS)}`
         );
-        /* transform the req body back from text */
-        const { body } = req;
-        if (body) {
-            if (typeof body === 'object') {
-                proxyReq.write(JSON.stringify(body));
-            } else {
-                proxyReq.write(body);
-            }
+    },
+    selfHandleResponse: true,
+    onProxyRes: responseInterceptor(async (responseBuffer, proxyRes, req, res) => {
+        const response = responseBuffer.toString('utf8'); // convert buffer to string
+        try {
+          const json = JSON.parse(response);
+          if (json) {
+            const data = json;
+            const fixed = fixNullValuesOnBuckets(data);
+            return JSON.stringify(fixed);
+          }
+        } catch (err) {
+          console.log(err);
         }
-    }
+    
+        return response;
+      }),
 }
 
-/* Parse the ndjson as text */
-app.use(bodyParser.text({ type: 'application/x-ndjson' }));
 
 /* This is how we can extend this logic to do extra stuff before
  * sending requests to our backend for example doing verification
@@ -43,6 +48,6 @@ app.use((req, res, next) => {
 })
 
 /* Here we proxy all the requests from reactivesearch to our backend */
-app.use('*', proxy(options));
+app.use('*', createProxyMiddleware(options));
 
-app.listen(7777, () => console.log('Server running at http://localhost:7777 🚀'));
+app.listen(3000, () => console.log('Server running at http://localhost:3000 🚀'));
